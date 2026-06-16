@@ -1,0 +1,75 @@
+pipeline {
+    agent any
+    environment {
+        SCANNER_HOME = tool 'sonar'
+        CCN = credentials('CLOUDINARY_CLOUD_NAME')
+        CK = credentials('CLOUDINARY_KEY')
+        CS = credentials('CLOUDINARY_SECRET')
+        MT = credentials('MAPBOX_TOKEN')
+        DB_URL = credentials('DB_URL')
+    }
+    stages {
+        stage('Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/keerthipriya26/3-Tier-Full-Stack-yelp-camp-eventapp.git'
+            }
+        }
+        stage('Sonar scan') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                  sh """
+                      ${SCANNER_HOME}/bin/sonar-scanner \
+                      -Dsonar.projectKey=Eventapp \
+                      -Dsonar.projectName=Eventapp
+                  """
+               }
+            }
+        }
+        stage ('Quality Gates') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar'
+                }
+            }
+        }
+        stage ('OWASP') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', nvdCredentialsId: 'nvd-apikey', odcInstallation: 'owasp'
+                dependencyCheckPublisher pattern: '**dependency-check-report.xml'
+            }
+        }
+        stage ('image') {
+            steps {
+                sh 'docker build -t appimage .'
+            }
+        }
+        stage ('trivy') {
+            steps {
+                sh 'trivy image appimage'
+            }
+        }
+        stage ('DockerHUB'){
+            steps{
+                script{
+                    withDockerRegistry(credentialsId: 'dockerhub') {
+                        sh 'docker tag appimage kee26/eventrepo:appimage'
+                        sh 'docker push kee26/eventrepo:appimage'
+                    }
+                }
+            }
+        }
+        stage ('Deploy') {
+            steps {
+                withKubeConfig(caCertificate: '', clusterName: 'EKS_CLOUD', contextName: '', credentialsId: 'eks-token', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://0FB74F4491ABEBB6612918B48322F4F7.gr7.us-east-2.eks.amazonaws.com') {
+                    sh "kubectl apply -f Manifests/ -n webapps"
+                }
+            }
+        }
+    }
+}
+
+
+
+
+
+
